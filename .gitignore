@@ -1,5 +1,6 @@
 # Environment variables
 .env
+.env.*
 
 # Python
 __pycache__/
@@ -22,11 +23,16 @@ var/
 *.egg-info/
 .installed.cfg
 *.egg
+MANIFEST
+.python-version
 
 # Virtual Environment
 venv/
 ENV/
 .venv/
+env/
+.env/
+.ENV/
 
 # Data files
 data/pdfs/*
@@ -38,15 +44,45 @@ data/knowledge_graph/*
 
 # Jupyter Notebook
 .ipynb_checkpoints
+*.ipynb
+*.ipynb_checkpoints/
 
 # VSCode
 .vscode/
+*.code-workspace
+.history
 
 # PyCharm
 .idea/
+*.iml
+*.iws
+.idea_modules/
 
 # Streamlit
 .streamlit/
+.streamlit/secrets.toml
+
+# Logs
+*.log
+logs/
+log/
+
+# Cache directories
+.cache/
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+*.py,cover
+.hypothesis/
+.pytest_cache/
+cover/
 
 # OS specific
 .DS_Store
@@ -56,3 +92,86 @@ data/knowledge_graph/*
 .Trashes
 ehthumbs.db
 Thumbs.db
+desktop.ini
+
+# Project specific
+# FAISS index files
+*.faiss
+*.index
+
+# Temporary files
+*.tmp
+*.temp
+*.swp
+*~
+
+# Distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Unit test / coverage reports
+htmlcov/
+.tox/
+.coverage
+.coverage.*
+.cache
+nosetests.xml
+coverage.xml
+*.cover
+.hypothesis/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Rope project settings
+.ropeproject
+
+# mkdocs documentation
+/site
+
+# Local development settings
+local_settings.py
+
+# Database
+*.db
+*.sqlite3
+
+# Large media files
+*.mp4
+*.tiff
+*.avi
+*.flv
+*.mov
+*.wmv
+
+# Vector store specific
+vector_store/
+embeddings/
+*.npy
+*.npz
+
+# Knowledge graph specific
+knowledge_graph/
+*.graphml
+*.gml
+*.gexf
+
+# PDF processing specific
+*.pdf
+!example.pdf  # Keep example PDF if you have one
