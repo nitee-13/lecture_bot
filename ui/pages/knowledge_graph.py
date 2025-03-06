@@ -110,6 +110,10 @@ class KnowledgeGraphPage:
             st.write(f"**Concepts:** {len(graph_data.get('nodes', []))}")
             st.write(f"**Relationships:** {len(graph_data.get('edges', []))}")
             
+            # Show raw JSON data
+            with st.expander("View Raw JSON Data"):
+                st.json(graph_data)
+            
             # Visualize the graph
             st.subheader("Graph Visualization")
             self.kg_visualizer.display_in_streamlit(graph_data, height=height, width=width)
@@ -135,6 +139,8 @@ class KnowledgeGraphPage:
             
         except Exception as e:
             st.error(f"Error visualizing knowledge graph: {str(e)}")
+            st.error("Full error details:")
+            st.exception(e)
     
     def _merge_all_graphs(self) -> dict:
         """Merge all available knowledge graphs.

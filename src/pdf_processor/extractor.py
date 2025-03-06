@@ -7,6 +7,8 @@ import fitz  # PyMuPDF
 from pathlib import Path
 from typing import Dict, List, Any, Tuple, Optional
 import logging
+import json
+import traceback
 
 from src.config import GOOGLE_API_KEY
 from src.llm.gemini_client import GeminiClient
@@ -54,8 +56,13 @@ class PDFExtractor:
                 logger.info(f"Extracting text from PDF using Gemini: {pdf_path}")
                 return self.gemini_client.process_pdf(pdf_path)
             except Exception as e:
-                logger.warning(f"Error using Gemini for extraction: {e}")
-                logger.info("Falling back to PyMuPDF for extraction")
+                error_msg = str(e)
+                if "429" in error_msg or "quota" in error_msg.lower():
+                    logger.warning("Gemini API quota exceeded. Falling back to PyMuPDF.")
+                    self.use_gemini = False  # Disable Gemini for future extractions
+                else:
+                    logger.warning(f"Error using Gemini for extraction: {e}")
+                    logger.info("Falling back to PyMuPDF for extraction")
         
         # Fallback to PyMuPDF
         return self._extract_with_pymupdf(pdf_path)
@@ -83,47 +90,110 @@ class PDFExtractor:
             logger.error(f"Error extracting text with PyMuPDF: {e}")
             raise
     
-    def process_pdf(self, pdf_path: str, output_path: Optional[str] = None) -> Dict[str, Any]:
-        """Process a PDF file and extract content.
+    def process_pdf(self, pdf_path: str) -> Dict[str, Any]:
+        """Process a PDF file and extract its content.
         
         Args:
             pdf_path: Path to the PDF file
-            output_path: Optional path to save the extracted content
             
         Returns:
-            Dictionary with extracted content
+            Dictionary containing extracted content
         """
         try:
-            # Extract text from PDF
-            raw_text = self.extract_text(pdf_path)
+            # Validate PDF file
+            if not os.path.exists(pdf_path):
+                raise FileNotFoundError(f"PDF file not found: {pdf_path}")
             
-            # Preprocess the extracted text
-            cleaned_text = self.preprocessor.preprocess_text(raw_text)
+            # Try using Gemini first if enabled
+            if self.use_gemini:
+                try:
+                    logger.info(f"Extracting text from PDF using Gemini: {pdf_path}")
+                    extracted_data = self.gemini_client.process_pdf(pdf_path)
+                    
+                    # If we got a dictionary response, validate and return it
+                    if isinstance(extracted_data, dict):
+                        # Ensure all required keys are present
+                        required_keys = ["concepts", "equations", "diagrams", "relationships"]
+                        for key in required_keys:
+                            if key not in extracted_data:
+                                extracted_data[key] = []
+                        
+                        # Validate the structure of each section
+                        for key in required_keys:
+                            if not isinstance(extracted_data[key], list):
+                                extracted_data[key] = []
+                        
+                        return extracted_data
+                    
+                    # If we got a string response, try to parse it as JSON
+                    if isinstance(extracted_data, str):
+                        try:
+                            # Try to parse the string as JSON
+                            parsed_data = json.loads(extracted_data)
+                            if isinstance(parsed_data, dict):
+                                return parsed_data
+                        except json.JSONDecodeError:
+                            # If parsing fails, convert it to the expected format
+                            return {
+                                "concepts": [],
+                                "equations": [],
+                                "diagrams": [],
+                                "relationships": [],
+                                "raw_text": extracted_data
+                            }
+                    
+                except Exception as e:
+                    logger.warning(f"Error using Gemini for extraction: {e}")
+                    logger.info("Falling back to PyMuPDF for extraction")
             
-            # Extract slides from the text
-            slides = self.preprocessor.extract_slides(cleaned_text)
+            # Fallback to PyMuPDF
+            try:
+                logger.info(f"Extracting text from PDF using PyMuPDF: {pdf_path}")
+                raw_text = self._extract_with_pymupdf(pdf_path)
+                
+                if not raw_text or len(raw_text.strip()) == 0:
+                    raise ValueError("No text extracted from PDF")
+                
+                # Extract basic structure from raw text
+                content = {
+                    "concepts": [],
+                    "equations": [],
+                    "diagrams": [],
+                    "relationships": [],
+                    "raw_text": raw_text
+                }
+                
+                # Try to extract equations
+                equations = re.findall(r'\$.*?\$|\\\(.*?\\\)|\\\[.*?\\\]', raw_text)
+                for eq in equations:
+                    content["equations"].append({
+                        "latex": eq,
+                        "context": "Extracted from text",
+                        "variables": [],
+                        "related_concepts": []
+                    })
+                
+                # Try to extract concepts (basic approach)
+                sentences = raw_text.split('.')
+                for sentence in sentences:
+                    if len(sentence.strip()) > 10:  # Avoid very short sentences
+                        content["concepts"].append({
+                            "name": sentence.strip(),
+                            "definition": sentence.strip(),
+                            "prerequisites": [],
+                            "related_concepts": []
+                        })
+                
+                return content
+                
+            except Exception as e:
+                logger.error(f"Error in PyMuPDF extraction: {e}")
+                logger.error(f"Traceback: {traceback.format_exc()}")
+                raise
             
-            # Clean up equations
-            for slide in slides:
-                slide["content"] = self.preprocessor.cleanup_equations(slide["content"])
-            
-            # Create result dictionary
-            result = {
-                "filename": os.path.basename(pdf_path),
-                "path": pdf_path,
-                "raw_text": raw_text,
-                "cleaned_text": cleaned_text,
-                "slides": slides,
-                "num_slides": len(slides)
-            }
-            
-            # Save to file if output path is provided
-            if output_path:
-                self._save_to_file(result, output_path)
-            
-            return result
         except Exception as e:
             logger.error(f"Error processing PDF: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
     def _save_to_file(self, data: Dict[str, Any], output_path: str) -> None:
@@ -141,7 +211,7 @@ class PDFExtractor:
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(f"# {data['filename']}\n\n")
                 
-                for slide in data["slides"]:
+                for slide in data["slide_content"]:
                     f.write(f"## Slide {slide['slide_number']}: {slide['title']}\n\n")
                     f.write(f"{slide['content']}\n\n")
             

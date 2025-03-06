@@ -7,6 +7,12 @@ from typing import List, Dict, Any, Optional
 import google.generativeai as genai
 from pathlib import Path
 import logging
+import fitz  # PyMuPDF
+import time
+import gc  # Garbage collection
+import io
+from PIL import Image
+import numpy as np
 
 from src.config import GOOGLE_API_KEY, GEMINI_MODEL, SYSTEM_PROMPT
 
@@ -33,7 +39,16 @@ class GeminiClient:
             
             genai.configure(api_key=GOOGLE_API_KEY)
             self.model = genai.GenerativeModel(model)
-            self.file_model = genai.GenerativeModel("gemini-1.5-pro-vision")
+            self.file_model = genai.GenerativeModel(model)  # Use the same model for file processing
+            
+            # Define generation config
+            self.generation_config = {
+                "temperature": 0.2,
+                "top_p": 0.95,
+                "top_k": 0,
+                "max_output_tokens": 8192,
+            }
+            
             logger.info(f"Initialized Gemini client with model: {model}")
         except Exception as e:
             logger.error(f"Error initializing Gemini client: {e}")
@@ -84,33 +99,53 @@ class GeminiClient:
             logger.error(f"Error generating embedding: {e}")
             return []
     
-    def process_pdf(self, pdf_path: str, temperature: float = 0.2) -> str:
-        """Extract content from a PDF file using Gemini.
+    def _process_page(self, page: fitz.Page, page_num: int, temperature: float) -> str:
+        """Process a single page with memory optimization.
         
         Args:
-            pdf_path: Path to the PDF file
-            temperature: The temperature for generation
+            page: PyMuPDF page object
+            page_num: Page number
+            temperature: Temperature for generation
             
         Returns:
-            The extracted text
+            Extracted text from the page
         """
         try:
-            # Read PDF file as bytes
-            with open(pdf_path, "rb") as f:
-                pdf_bytes = f.read()
+            # Get page dimensions
+            width, height = page.rect.width, page.rect.height
             
-            # Create prompt for PDF extraction
-            prompt = """
-            Extract all text content from this PDF. 
-            Preserve the structure including slide numbers, titles, and bullet points.
+            # Calculate scale to reduce memory usage while maintaining quality
+            scale = min(2.0, 2000 / max(width, height))
+            
+            # Create pixmap with reduced resolution
+            pix = page.get_pixmap(matrix=fitz.Matrix(scale, scale))
+            
+            # Convert to PIL Image for memory-efficient processing
+            img = Image.frombytes("RGB", [pix.width, pix.height], pix.samples)
+            
+            # Convert to JPEG with compression to reduce memory
+            img_byte_arr = io.BytesIO()
+            img.save(img_byte_arr, format='JPEG', quality=85, optimize=True)
+            img_bytes = img_byte_arr.getvalue()
+            
+            # Clear memory
+            del pix
+            del img
+            del img_byte_arr
+            gc.collect()
+            
+            # Create prompt for this page
+            prompt = f"""
+            Extract all text content from this page (Page {page_num + 1}). 
+            Preserve the structure including titles and bullet points.
             Correctly format any mathematical equations using LaTeX notation.
             Include all text, even if it appears in diagrams or charts.
-            Preserve the relationships between concepts.
+            Format the output as a structured text with clear section breaks.
             """
             
-            # Generate response
+            # Generate response for this page
             response = self.file_model.generate_content(
-                [prompt, pdf_bytes],
+                [prompt, img_bytes],
                 generation_config={
                     "temperature": temperature,
                     "top_p": 0.95,
@@ -119,10 +154,184 @@ class GeminiClient:
                 }
             )
             
-            return response.text
+            # Clear memory
+            del img_bytes
+            gc.collect()
+            
+            return f"Page {page_num + 1}:\n{response.text}"
+            
         except Exception as e:
-            logger.error(f"Error processing PDF: {e}")
-            return f"Error processing PDF: {str(e)}"
+            logger.warning(f"Error processing page {page_num + 1}: {e}")
+            # Fallback to PyMuPDF text extraction
+            return f"Page {page_num + 1}:\n{page.get_text('text')}"
+    
+    def _fallback_extract(self, pdf_path: str) -> Dict[str, Any]:
+        """Fallback method to extract content using PyMuPDF.
+        
+        Args:
+            pdf_path: Path to the PDF file
+            
+        Returns:
+            Dictionary containing extracted content
+        """
+        try:
+            # Open the PDF
+            doc = fitz.open(pdf_path)
+            
+            # Extract content from each page
+            content = {
+                "concepts": [],
+                "equations": [],
+                "diagrams": [],
+                "relationships": []
+            }
+            
+            # Process each page
+            for page_num in range(len(doc)):
+                page = doc[page_num]
+                text = page.get_text()
+                
+                # Extract equations (basic pattern matching)
+                import re
+                equations = re.findall(r'\$.*?\$|\\\(.*?\\\)|\\\[.*?\\\]', text)
+                for eq in equations:
+                    content["equations"].append({
+                        "latex": eq,
+                        "context": "Extracted from text",
+                        "variables": [],
+                        "related_concepts": []
+                    })
+                
+                # Extract concepts (basic approach)
+                sentences = text.split('.')
+                for sentence in sentences:
+                    if len(sentence.strip()) > 10:  # Avoid very short sentences
+                        content["concepts"].append({
+                            "name": sentence.strip(),
+                            "definition": sentence.strip(),
+                            "prerequisites": [],
+                            "related_concepts": []
+                        })
+            
+            doc.close()
+            return content
+            
+        except Exception as e:
+            logger.error(f"Error in fallback extraction: {e}")
+            return {
+                "concepts": [],
+                "equations": [],
+                "diagrams": [],
+                "relationships": []
+            }
+    
+    def process_pdf(self, pdf_path: str) -> Dict[str, Any]:
+        """Process a PDF file using Gemini Vision.
+        
+        Args:
+            pdf_path: Path to the PDF file
+            
+        Returns:
+            Dictionary containing extracted text and metadata
+        """
+        try:
+            # Validate PDF file
+            pdf_path = Path(pdf_path)
+            if not pdf_path.exists():
+                raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+            
+            # Upload the PDF file to Gemini
+            file_data = genai.upload_file(str(pdf_path))
+            
+            # Create a prompt that handles varying slide formats
+            prompt = """Extract structured information from this lecture slide. 
+            Note that equations and concepts may be placed differently across slides.
+            
+            For each slide:
+            1. Identify key concepts and their definitions
+            2. Extract mathematical equations in LaTeX format, regardless of their placement
+            3. Identify diagrams and their relationships to concepts
+            4. Note any prerequisites or related concepts mentioned
+            
+            Format the output as JSON with the following structure:
+            {
+                "concepts": [
+                    {
+                        "name": "concept name",
+                        "definition": "clear definition",
+                        "prerequisites": ["prereq1", "prereq2"],
+                        "related_concepts": ["related1", "related2"]
+                    }
+                ],
+                "equations": [
+                    {
+                        "latex": "equation in LaTeX",
+                        "context": "where/how it's used",
+                        "variables": ["var1", "var2"],
+                        "related_concepts": ["concept1", "concept2"]
+                    }
+                ],
+                "diagrams": [
+                    {
+                        "description": "what the diagram shows",
+                        "type": "flowchart/circuit/etc",
+                        "relationships": ["rel1", "rel2"],
+                        "related_concepts": ["concept1", "concept2"]
+                    }
+                ],
+                "relationships": [
+                    {
+                        "from": "source concept",
+                        "to": "target concept",
+                        "type": "prerequisite/part_of/etc",
+                        "description": "how they're related"
+                    }
+                ]
+            }
+            
+            Important:
+            - Look for equations anywhere on the slide, not just in specific sections
+            - Consider both explicit and implicit relationships
+            - Include context for equations to understand their usage
+            - Note any visual elements that help explain concepts
+            """
+            
+            # Process the PDF with Gemini
+            response = self.model.generate_content(
+                [prompt, file_data],
+                generation_config=self.generation_config
+            )
+            
+            # Parse the response as JSON
+            try:
+                # Extract the JSON part from the response
+                json_text = response.text
+                # Check if the response is wrapped in code blocks
+                if "```json" in json_text:
+                    json_text = json_text.split("```json")[1].split("```")[0]
+                elif "```" in json_text:
+                    json_text = json_text.split("```")[1].split("```")[0]
+                
+                # Parse the JSON
+                extracted_data = json.loads(json_text.strip())
+                
+                # Log the extracted JSON for debugging
+                print("\nExtracted JSON from PDF:")
+                print(json.dumps(extracted_data, indent=2))
+                
+                return extracted_data
+                
+            except json.JSONDecodeError as e:
+                print(f"Error parsing JSON response: {e}")
+                print("Raw response:", response.text)
+                raise
+                
+        except Exception as e:
+            print(f"Error in process_pdf: {e}")
+            import traceback
+            print(traceback.format_exc())
+            # Fallback to PyMuPDF
+            return self._fallback_extract(pdf_path)
     
     def chat(self, messages: List[Dict[str, str]], temperature: float = 0.2) -> str:
         """Generate a response to a conversation.

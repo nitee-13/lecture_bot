@@ -5,6 +5,8 @@ from typing import List, Dict, Any, Tuple
 import re
 from pathlib import Path
 import json
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from functools import partial
 
 from src.config import CHUNK_SIZE, CHUNK_OVERLAP
 
@@ -12,15 +14,17 @@ from src.config import CHUNK_SIZE, CHUNK_OVERLAP
 class TextChunker:
     """Split text into chunks for embedding."""
     
-    def __init__(self, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHUNK_OVERLAP):
+    def __init__(self, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHUNK_OVERLAP, max_workers: int = 4):
         """Initialize the text chunker.
         
         Args:
             chunk_size: Maximum chunk size in characters
             chunk_overlap: Overlap between chunks in characters
+            max_workers: Maximum number of worker threads for parallel processing
         """
         self.chunk_size = chunk_size
         self.chunk_overlap = chunk_overlap
+        self.max_workers = max_workers
     
     def chunk_text(self, text: str) -> List[str]:
         """Split text into chunks.
@@ -71,6 +75,144 @@ class TextChunker:
                 start = end
         
         return chunks
+    
+    def chunk_lecture_content(self, content: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Split lecture content into chunks.
+        
+        Args:
+            content: Lecture content dictionary
+            
+        Returns:
+            List of chunked content items
+        """
+        chunks = []
+        
+        # Handle slide_content structure
+        if "slide_content" in content:
+            slides = content["slide_content"]
+            
+            # Process slides in parallel
+            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                # Create a partial function with the slide processing logic
+                process_slide = partial(self._process_single_slide)
+                
+                # Submit all slides for processing
+                future_to_slide = {
+                    executor.submit(process_slide, slide): slide 
+                    for slide in slides
+                }
+                
+                # Collect results as they complete
+                for future in as_completed(future_to_slide):
+                    slide_chunks = future.result()
+                    chunks.extend(slide_chunks)
+        
+        # Handle concepts/equations/diagrams/relationships structure
+        elif all(key in content for key in ["concepts", "equations", "diagrams", "relationships"]):
+            # Create a single chunk for each concept
+            for concept in content["concepts"]:
+                chunk_text = f"Concept: {concept['name']}\n"
+                chunk_text += f"Definition: {concept['definition']}\n"
+                
+                # Add prerequisites if any
+                if concept.get("prerequisites"):
+                    chunk_text += f"Prerequisites: {', '.join(concept['prerequisites'])}\n"
+                
+                # Add related concepts if any
+                if concept.get("related_concepts"):
+                    chunk_text += f"Related Concepts: {', '.join(concept['related_concepts'])}\n"
+                
+                # Add related equations
+                related_equations = [
+                    eq for eq in content["equations"]
+                    if concept["name"] in eq.get("related_concepts", [])
+                ]
+                if related_equations:
+                    chunk_text += "\nRelated Equations:\n"
+                    for eq in related_equations:
+                        chunk_text += f"- {eq['latex']}\n"
+                
+                # Add related diagrams
+                related_diagrams = [
+                    d for d in content["diagrams"]
+                    if concept["name"] in d.get("related_concepts", [])
+                ]
+                if related_diagrams:
+                    chunk_text += "\nRelated Diagrams:\n"
+                    for d in related_diagrams:
+                        chunk_text += f"- {d['description']}\n"
+                
+                # Add relationships
+                related_relationships = [
+                    r for r in content["relationships"]
+                    if r["from"] == concept["name"] or r["to"] == concept["name"]
+                ]
+                if related_relationships:
+                    chunk_text += "\nRelationships:\n"
+                    for r in related_relationships:
+                        chunk_text += f"- {r['from']} {r['type']} {r['to']}\n"
+                
+                chunk_item = {
+                    "id": f"concept_{concept['name'].lower().replace(' ', '_')}",
+                    "slide_number": 0,
+                    "slide_title": f"Concept: {concept['name']}",
+                    "chunk_index": 0,
+                    "text": chunk_text,
+                    "equations": [eq["latex"] for eq in related_equations],
+                    "concepts": [concept["name"]],
+                    "source": "Concept Extraction"
+                }
+                chunks.append(chunk_item)
+        
+        return chunks
+    
+    def _process_single_slide(self, slide: Dict[str, Any]) -> List[Dict[str, Any]]:
+        """Process a single slide into chunks.
+        
+        Args:
+            slide: Slide dictionary
+            
+        Returns:
+            List of chunks for the slide
+        """
+        slide_chunks = []
+        slide_number = slide.get("slide_number", 0)
+        slide_title = slide.get("title", "")
+        slide_content = slide.get("content", "")
+        equations = slide.get("equations", [])
+        concepts = slide.get("concepts", [])
+        
+        # Combine the slide content with equations and concepts
+        full_text = slide_content
+        
+        # Add equations if any
+        if equations:
+            equations_text = "\nEquations:\n" + "\n".join(equations)
+            full_text += equations_text
+        
+        # Add concepts if any
+        if concepts:
+            concepts_text = "\nConcepts:\n" + ", ".join(concepts)
+            full_text += concepts_text
+        
+        # Chunk the full text
+        text_chunks = self.chunk_text(full_text)
+        
+        # Create a chunk item for each text chunk
+        for i, chunk_text in enumerate(text_chunks):
+            chunk_item = {
+                "id": f"slide_{slide_number}_chunk_{i}",
+                "slide_number": slide_number,
+                "slide_title": slide_title,
+                "chunk_index": i,
+                "text": chunk_text,
+                "equations": equations,
+                "concepts": concepts,
+                "source": f"Slide {slide_number}"
+            }
+            slide_chunks.append(chunk_item)
+        
+        return slide_chunks
     
     def _clean_text(self, text: str) -> str:
         """Clean the text.
@@ -145,62 +287,6 @@ class TextChunker:
                 return i
         
         return position
-    
-    def chunk_lecture_content(self, content: Dict[str, Any]) -> List[Dict[str, Any]]:
-        """Split lecture content into chunks.
-        
-        Args:
-            content: Lecture content dictionary
-            
-        Returns:
-            List of chunked content items
-        """
-        chunks = []
-        
-        # Check if the content has the expected structure
-        if "slide_content" not in content:
-            return chunks
-        
-        slides = content["slide_content"]
-        
-        for slide in slides:
-            slide_number = slide.get("slide_number", 0)
-            slide_title = slide.get("title", "")
-            slide_content = slide.get("content", "")
-            equations = slide.get("equations", [])
-            concepts = slide.get("concepts", [])
-            
-            # Combine the slide content with equations and concepts
-            full_text = slide_content
-            
-            # Add equations if any
-            if equations:
-                equations_text = "\nEquations:\n" + "\n".join(equations)
-                full_text += equations_text
-            
-            # Add concepts if any
-            if concepts:
-                concepts_text = "\nConcepts:\n" + ", ".join(concepts)
-                full_text += concepts_text
-            
-            # Chunk the full text
-            text_chunks = self.chunk_text(full_text)
-            
-            # Create a chunk item for each text chunk
-            for i, chunk_text in enumerate(text_chunks):
-                chunk_item = {
-                    "id": f"slide_{slide_number}_chunk_{i}",
-                    "slide_number": slide_number,
-                    "slide_title": slide_title,
-                    "chunk_index": i,
-                    "text": chunk_text,
-                    "equations": equations,
-                    "concepts": concepts,
-                    "source": f"Slide {slide_number}"
-                }
-                chunks.append(chunk_item)
-        
-        return chunks
     
     def save_chunks(self, chunks: List[Dict[str, Any]], output_path: str) -> str:
         """Save chunks to a file.

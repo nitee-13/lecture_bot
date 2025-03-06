@@ -7,6 +7,7 @@ from pathlib import Path
 import uuid
 import time
 import logging
+import traceback
 
 from src.pdf_processor.extractor import PDFExtractor
 from src.pdf_processor.preprocessor import TextPreprocessor
@@ -67,15 +68,17 @@ class UploadPage:
                             status.update(label="✅ Processing complete!", state="complete")
                             st.success(f"Successfully processed {uploaded_file.name}")
                             st.session_state.active_document = document_id
-                            
-                            # Show details about the processed file
-                            self._show_processing_details(document_id)
                         else:
                             status.update(label="❌ Processing failed", state="error")
                             st.error("Failed to process the file. Please try again.")
                 except Exception as e:
                     logger.error(f"Error processing file: {e}")
+                    logger.error(f"Traceback: {traceback.format_exc()}")
                     st.error(f"Error processing file: {str(e)}")
+                
+                # Show details about the processed file outside the status container
+                if document_id:
+                    self._show_processing_details(document_id)
     
     def _save_uploaded_file(self, uploaded_file) -> str:
         """Save the uploaded file to disk.
@@ -86,19 +89,23 @@ class UploadPage:
         Returns:
             Path to the saved file
         """
-        # Create directory if it doesn't exist
-        os.makedirs(PDF_STORAGE_PATH, exist_ok=True)
-        
-        # Generate a unique filename
-        filename = f"{int(time.time())}_{uploaded_file.name}"
-        file_path = os.path.join(PDF_STORAGE_PATH, filename)
-        
-        # Save the file
-        with open(file_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
-        
-        logger.info(f"Saved uploaded file to: {file_path}")
-        return file_path
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(PDF_STORAGE_PATH, exist_ok=True)
+            
+            # Generate a unique filename
+            filename = f"{int(time.time())}_{uploaded_file.name}"
+            file_path = os.path.join(PDF_STORAGE_PATH, filename)
+            
+            # Save the file
+            with open(file_path, "wb") as f:
+                f.write(uploaded_file.getbuffer())
+            
+            logger.info(f"Saved uploaded file to: {file_path}")
+            return file_path
+        except Exception as e:
+            logger.error(f"Error saving uploaded file: {e}")
+            raise
     
     def _process_file(self, file_path: str, status) -> str:
         """Process the uploaded file.
@@ -115,13 +122,25 @@ class UploadPage:
             status.update(label="🔍 Extracting text from PDF...", state="running")
             extracted_data = self.pdf_extractor.process_pdf(file_path)
             
+            if not extracted_data or not any(key in extracted_data for key in ["slide_content", "concepts", "equations", "diagrams", "relationships"]):
+                logger.error("No valid content extracted from PDF")
+                raise ValueError("Failed to extract valid content from PDF")
+            
             # 2. Create chunks from the extracted text
             status.update(label="✂️ Chunking text...", state="running")
             chunks = self.chunker.chunk_lecture_content(extracted_data)
             
+            if not chunks:
+                logger.error("No chunks created from extracted content")
+                raise ValueError("Failed to create text chunks")
+            
             # 3. Generate embeddings for chunks
             status.update(label="🧠 Generating embeddings...", state="running")
             chunks_with_embeddings = self.embedder.generate_embeddings(chunks)
+            
+            if not chunks_with_embeddings or not all("embedding" in chunk for chunk in chunks_with_embeddings):
+                logger.error("Failed to generate embeddings for chunks")
+                raise ValueError("Failed to generate embeddings")
             
             # 4. Build knowledge graph
             status.update(label="🔄 Building knowledge graph...", state="running")
@@ -142,6 +161,7 @@ class UploadPage:
             return document_id
         except Exception as e:
             logger.error(f"Error processing file: {e}")
+            logger.error(f"Traceback: {traceback.format_exc()}")
             raise
     
     def _show_processing_details(self, document_id: str):
@@ -150,28 +170,32 @@ class UploadPage:
         Args:
             document_id: ID of the processed document
         """
-        # Get document chunks
-        chunks = self.vector_store.get_document_chunks(document_id)
-        
-        if not chunks:
-            st.warning("No chunks found for this document.")
-            return
-        
-        # Display summary statistics
-        st.write(f"**Document ID:** {document_id}")
-        st.write(f"**Number of chunks:** {len(chunks)}")
-        
-        # Display sample chunks
-        with st.expander("View Sample Chunks", expanded=False):
-            for i, chunk in enumerate(chunks[:3]):
-                st.markdown(f"**Chunk {i+1}**")
-                st.text(chunk["text"][:200] + "...")
-                st.markdown("---")
-        
-        # Show knowledge graph info
-        graph_path = os.path.join("data/knowledge_graph", f"{document_id}_graph.json")
-        if os.path.exists(graph_path):
-            st.write("**Knowledge Graph:** Created successfully")
-            st.write("You can view it in the Knowledge Graph tab.")
-        else:
-            st.warning("Knowledge Graph could not be created for this document.")
+        try:
+            # Get document chunks
+            chunks = self.vector_store.get_document_chunks(document_id)
+            
+            if not chunks:
+                st.warning("No chunks found for this document.")
+                return
+            
+            # Display summary statistics
+            st.write(f"**Document ID:** {document_id}")
+            st.write(f"**Number of chunks:** {len(chunks)}")
+            
+            # Display sample chunks in a single expander
+            with st.expander("View Sample Chunks"):
+                for i, chunk in enumerate(chunks[:3]):
+                    st.markdown(f"**Chunk {i+1}**")
+                    st.text(chunk["text"][:200] + "...")
+                    st.markdown("---")
+            
+            # Show knowledge graph info
+            graph_path = os.path.join("data/knowledge_graph", f"{document_id}_graph.json")
+            if os.path.exists(graph_path):
+                st.success("✅ Knowledge Graph created successfully")
+                st.write("You can view it in the Knowledge Graph tab.")
+            else:
+                st.warning("Knowledge Graph could not be created for this document.")
+        except Exception as e:
+            logger.error(f"Error showing processing details: {e}")
+            st.error("Error displaying document details")

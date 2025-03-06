@@ -28,85 +28,139 @@ class KnowledgeGraphBuilder:
         """Build a knowledge graph from lecture content.
         
         Args:
-            content: Lecture content dictionary
-            
-        Returns:
-            Knowledge graph data as a dictionary
-        """
-        if self.use_gemini:
-            # Use Gemini to build the graph
-            return self.gemini_client.build_knowledge_graph(content)
-        
-        # Fallback to basic graph construction
-        return self._build_basic_graph(content)
-    
-    def _build_basic_graph(self, content: Dict[str, Any]) -> Dict[str, Any]:
-        """Build a basic knowledge graph from lecture content.
-        
-        Args:
-            content: Lecture content dictionary
+            content: Lecture content dictionary with concepts, equations, and relationships
             
         Returns:
             Knowledge graph data as a dictionary
         """
         graph_data = {"nodes": [], "edges": []}
         
-        # Check if the content has the expected structure
-        if "slide_content" not in content:
-            return graph_data
-        
-        # Extract concepts and relationships from slides
-        concepts = set()
-        relationships = []
-        
-        for slide in content["slide_content"]:
-            slide_concepts = slide.get("concepts", [])
-            slide_relationships = slide.get("relationships", [])
+        # Handle slide_content structure
+        if "slide_content" in content:
+            slides = content["slide_content"]
             
-            # Add concepts to the set
-            for concept in slide_concepts:
-                concepts.add(concept)
-            
-            # Add relationships to the list
-            relationships.extend(slide_relationships)
-            
-            # Extract equations as concepts
-            for equation in slide.get("equations", []):
-                concepts.add(f"Equation: {equation}")
+            # Add nodes for each slide
+            for slide in slides:
+                slide_id = f"slide_{slide['slide_number']}"
+                graph_data["nodes"].append({
+                    "id": slide_id,
+                    "label": slide["title"],
+                    "type": "slide"
+                })
                 
-                # Create relationships between equations and concepts
-                for concept in slide_concepts:
-                    relationships.append({
-                        "from": concept,
-                        "to": f"Equation: {equation}",
-                        "type": "related to"
+                # Add edges between consecutive slides
+                if slide["slide_number"] > 1:
+                    prev_slide_id = f"slide_{slide['slide_number'] - 1}"
+                    graph_data["edges"].append({
+                        "from": prev_slide_id,
+                        "to": slide_id,
+                        "label": "next"
+                    })
+                
+                # Add nodes and edges for concepts in the slide
+                for concept in slide.get("concepts", []):
+                    concept_id = f"concept_{concept.lower().replace(' ', '_')}"
+                    graph_data["nodes"].append({
+                        "id": concept_id,
+                        "label": concept,
+                        "type": "concept"
+                    })
+                    graph_data["edges"].append({
+                        "from": slide_id,
+                        "to": concept_id,
+                        "label": "contains"
+                    })
+                
+                # Add nodes and edges for equations
+                for equation in slide.get("equations", []):
+                    eq_id = f"equation_{len(graph_data['nodes'])}"
+                    graph_data["nodes"].append({
+                        "id": eq_id,
+                        "label": equation,
+                        "type": "equation"
+                    })
+                    graph_data["edges"].append({
+                        "from": slide_id,
+                        "to": eq_id,
+                        "label": "contains"
                     })
         
-        # Create nodes for all concepts
-        for i, concept in enumerate(concepts):
-            node = {
-                "id": f"concept_{i}",
-                "label": concept,
-                "type": "concept" if not concept.startswith("Equation:") else "equation"
-            }
-            graph_data["nodes"].append(node)
-        
-        # Create edges for all relationships
-        concept_to_id = {node["label"]: node["id"] for node in graph_data["nodes"]}
-        
-        for i, rel in enumerate(relationships):
-            source = rel.get("from", "")
-            target = rel.get("to", "")
-            rel_type = rel.get("type", "related to")
+        # Handle concepts/equations/diagrams/relationships structure
+        elif all(key in content for key in ["concepts", "equations", "diagrams", "relationships"]):
+            # Add nodes for concepts
+            for concept in content["concepts"]:
+                concept_id = f"concept_{concept['name'].lower().replace(' ', '_')}"
+                graph_data["nodes"].append({
+                    "id": concept_id,
+                    "label": concept["name"],
+                    "type": "concept",
+                    "definition": concept["definition"]
+                })
+                
+                # Add edges for prerequisites
+                for prereq in concept.get("prerequisites", []):
+                    prereq_id = f"concept_{prereq.lower().replace(' ', '_')}"
+                    graph_data["edges"].append({
+                        "from": prereq_id,
+                        "to": concept_id,
+                        "label": "prerequisite"
+                    })
+                
+                # Add edges for related concepts
+                for related in concept.get("related_concepts", []):
+                    related_id = f"concept_{related.lower().replace(' ', '_')}"
+                    graph_data["edges"].append({
+                        "from": concept_id,
+                        "to": related_id,
+                        "label": "related_to"
+                    })
             
-            # Only add the edge if both nodes exist
-            if source in concept_to_id and target in concept_to_id:
-                edge = {
-                    "from": concept_to_id[source],
-                    "to": concept_to_id[target],
-                    "label": rel_type
-                }
-                graph_data["edges"].append(edge)
+            # Add nodes for equations
+            for equation in content["equations"]:
+                eq_id = f"equation_{len(graph_data['nodes'])}"
+                graph_data["nodes"].append({
+                    "id": eq_id,
+                    "label": equation["latex"],
+                    "type": "equation",
+                    "context": equation["context"]
+                })
+                
+                # Add edges to related concepts
+                for concept in equation.get("related_concepts", []):
+                    concept_id = f"concept_{concept.lower().replace(' ', '_')}"
+                    graph_data["edges"].append({
+                        "from": concept_id,
+                        "to": eq_id,
+                        "label": "expressed_by"
+                    })
+            
+            # Add nodes for diagrams
+            for diagram in content["diagrams"]:
+                diagram_id = f"diagram_{len(graph_data['nodes'])}"
+                graph_data["nodes"].append({
+                    "id": diagram_id,
+                    "label": diagram["description"],
+                    "type": "diagram"
+                })
+                
+                # Add edges to related concepts
+                for concept in diagram.get("related_concepts", []):
+                    concept_id = f"concept_{concept.lower().replace(' ', '_')}"
+                    graph_data["edges"].append({
+                        "from": concept_id,
+                        "to": diagram_id,
+                        "label": "illustrated_by"
+                    })
+            
+            # Add edges from relationships
+            for rel in content["relationships"]:
+                from_id = f"concept_{rel['from'].lower().replace(' ', '_')}"
+                to_id = f"concept_{rel['to'].lower().replace(' ', '_')}"
+                graph_data["edges"].append({
+                    "from": from_id,
+                    "to": to_id,
+                    "label": rel["type"]
+                })
         
         return graph_data
     

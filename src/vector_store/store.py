@@ -177,10 +177,41 @@ class VectorStore:
         if "documents" not in self.metadata or document_id not in self.metadata["documents"]:
             return
         
-        # This is a simplistic implementation - in a real system, we would need to
-        # rebuild the index after removing documents.
-        # For now, we'll just mark the document as removed in the metadata
-        self.metadata["documents"][document_id]["removed"] = True
+        # Get the chunk indices for this document
+        chunk_indices = self.metadata["documents"][document_id]["chunk_indices"]
+        
+        # Remove the chunks from the chunks list
+        # We need to remove them in reverse order to maintain correct indices
+        for idx in sorted(chunk_indices, reverse=True):
+            if idx < len(self.chunks):
+                self.chunks.pop(idx)
+        
+        # Remove the document from metadata
+        del self.metadata["documents"][document_id]
+        
+        # Rebuild the index with remaining chunks
+        if self.chunks:
+            # Generate new embeddings for remaining chunks
+            from src.embedding.embedder import Embedder
+            embedder = Embedder()
+            
+            # Generate embeddings for all chunks at once
+            texts = [chunk["text"] for chunk in self.chunks]
+            embeddings = []
+            for text in texts:
+                embedding = embedder.generate_embedding(text)
+                embeddings.append(embedding)
+            
+            # Convert to numpy array and ensure correct shape
+            embeddings = np.array(embeddings, dtype=np.float32)
+            
+            # Create a new index with the correct dimensions
+            self.index = faiss.IndexFlatL2(embeddings.shape[1])
+            
+            # Add all embeddings at once
+            self.index.add(embeddings)
+        else:
+            self.index = None
         
         # Save to disk
         self._save()
@@ -201,3 +232,20 @@ class VectorStore:
                 documents.append(doc_id)
         
         return documents
+    
+    def clear_all(self):
+        """Clear all documents from the vector store."""
+        # Reset metadata
+        self.metadata = {
+            "documents": {},
+            "chunks_file": "chunks.json"
+        }
+        
+        # Reset chunks
+        self.chunks = []
+        
+        # Reset index
+        self.index = None
+        
+        # Save to disk
+        self._save()

@@ -204,11 +204,18 @@ class KnowledgeGraphVisualizer:
         
         Args:
             graph_data: Knowledge graph data
-            height: Height of the visualization
-            width: Width of the visualization
+            height: Height of the visualization (e.g., "400px" or "100%")
+            width: Width of the visualization (e.g., "100%" or "800px")
         """
+        # Convert height to integer (remove 'px' suffix)
+        height_int = int(height.replace('px', '')) if 'px' in height else 400
+        
+        # Convert width to integer (remove 'px' suffix)
+        # For percentage values, use a default width
+        width_int = int(width.replace('px', '')) if 'px' in width else 800
+        
         # Generate the HTML
         html = self.visualize_pyvis(graph_data, height=height, width=width)
         
         # Display the HTML in Streamlit
-        st.components.v1.html(html, height=height, width=width)
+        st.components.v1.html(html, height=height_int, width=width_int)
