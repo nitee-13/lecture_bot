@@ -25,9 +25,17 @@ class PromptBuilder:
         formatted_contexts = "\n\n".join([f"Context {i+1}:\n{ctx}" for i, ctx in enumerate(contexts)])
         
         # Build the prompt
-        prompt = f"""Please answer the following question based on the provided contexts from lecture slides. 
-If the question involves equations, make sure to render them correctly.
-If you cannot find the answer in the contexts, acknowledge that and provide a general response based on your knowledge.
+        prompt = f"""You are a knowledgeable teaching assistant helping a student understand their lecture material. 
+Please provide a detailed and comprehensive answer to the following question based on the provided contexts from lecture slides.
+
+Your response should:
+1. Directly answer the question using information from the provided contexts
+2. Include relevant examples and analogies to help explain the concepts
+3. Connect related concepts and show relationships between ideas
+4. If equations are involved, explain them step by step
+5. If the answer involves multiple steps or concepts, break it down clearly
+6. If you need to make assumptions or use general knowledge, clearly state that
+7. If you cannot find the answer in the contexts, acknowledge that and provide a general response based on your knowledge
 
 Contexts:
 {formatted_contexts}

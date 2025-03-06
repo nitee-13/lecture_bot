@@ -249,3 +249,17 @@ class VectorStore:
         
         # Save to disk
         self._save()
+    
+    def get_chunk(self, chunk_id: str) -> Optional[Dict[str, Any]]:
+        """Get a chunk by its ID.
+        
+        Args:
+            chunk_id: ID of the chunk
+            
+        Returns:
+            The chunk data if found, None otherwise
+        """
+        for chunk in self.chunks:
+            if chunk.get("id") == chunk_id:
+                return chunk
+        return None
