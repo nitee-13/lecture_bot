@@ -6,6 +6,8 @@ import numpy as np
 import networkx as nx
 from pathlib import Path
 import json
+import re
+from difflib import SequenceMatcher
 
 from src.vector_store.store import VectorStore
 from src.embedding.embedder import Embedder
@@ -24,6 +26,36 @@ class Retriever:
         """
         self.vector_store = vector_store
         self.embedder = embedder
+        self.similarity_threshold = 0.8  # Threshold for fuzzy matching
+    
+    def _normalize_text(self, text: str) -> str:
+        """Normalize text for better matching.
+        
+        Args:
+            text: Text to normalize
+            
+        Returns:
+            Normalized text
+        """
+        # Convert to lowercase
+        text = text.lower()
+        # Replace special characters with spaces
+        text = re.sub(r'[_-]', ' ', text)
+        # Remove extra whitespace
+        text = ' '.join(text.split())
+        return text
+    
+    def _similarity_ratio(self, s1: str, s2: str) -> float:
+        """Calculate similarity ratio between two strings.
+        
+        Args:
+            s1: First string
+            s2: Second string
+            
+        Returns:
+            Similarity ratio between 0 and 1
+        """
+        return SequenceMatcher(None, s1, s2).ratio()
     
     def retrieve(self, query: str, k: int = 10) -> List[Dict[str, Any]]:
         """Retrieve relevant chunks using text-based similarity.
@@ -105,12 +137,29 @@ class Retriever:
         Returns:
             List of extracted concepts
         """
-        # Simple concept extraction - can be improved with NLP
-        words = query.lower().split()
         concepts = []
         
-        # Look for capitalized words or phrases
+        # Split query into words and handle special characters
+        words = re.findall(r'[\w-]+', query)
+        
+        # Look for technical terms (words with underscores, hyphens, or camelCase)
         for i, word in enumerate(words):
+            # Handle underscore-separated terms
+            if '_' in word:
+                concepts.append(word)
+                continue
+                
+            # Handle hyphen-separated terms
+            if '-' in word:
+                concepts.append(word)
+                continue
+                
+            # Handle camelCase terms
+            if re.search(r'[a-z][A-Z]', word):
+                concepts.append(word)
+                continue
+            
+            # Handle capitalized words
             if word[0].isupper() if word else False:
                 concept = word
                 # Try to extend to phrases
@@ -119,8 +168,20 @@ class Retriever:
                     concept += " " + words[j]
                     j += 1
                 concepts.append(concept)
+                continue
+            
+            # Handle technical terms that might be in lowercase
+            if len(word) > 3 and word.islower():
+                concepts.append(word)
         
-        return concepts
+        # Normalize concepts
+        normalized_concepts = []
+        for concept in concepts:
+            # Normalize the concept
+            normalized = self._normalize_text(concept)
+            normalized_concepts.append(normalized)
+        
+        return normalized_concepts
     
     def _retrieve_from_graph(self, concepts: List[str], k: int) -> List[Dict[str, Any]]:
         """Retrieve relevant chunks using the knowledge graph.
@@ -165,9 +226,26 @@ class Retriever:
         for concept in concepts:
             # Find nodes containing the concept
             for node in G.nodes(data=True):
-                if concept.lower() in node[1].get("label", "").lower():
+                node_label = node[1].get("label", "").lower()
+                node_id = node[0].lower()
+                
+                # Normalize node label and ID for comparison
+                normalized_label = self._normalize_text(node_label)
+                normalized_id = self._normalize_text(node_id)
+                
+                # Check for exact matches
+                if (concept in normalized_label or 
+                    concept in normalized_id or 
+                    concept.replace(' ', '-') in node_label or
+                    concept.replace(' ', '_') in node_id):
                     relevant_nodes.add(node[0])
-                    # Add neighbors
+                    relevant_nodes.update(G.neighbors(node[0]))
+                    continue
+                
+                # Check for fuzzy matches
+                if (self._similarity_ratio(concept, normalized_label) >= self.similarity_threshold or
+                    self._similarity_ratio(concept, normalized_id) >= self.similarity_threshold):
+                    relevant_nodes.add(node[0])
                     relevant_nodes.update(G.neighbors(node[0]))
         
         # Get chunks associated with relevant nodes
