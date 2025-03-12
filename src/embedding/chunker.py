@@ -8,13 +8,13 @@ import json
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import partial
 
-from src.config import CHUNK_SIZE, CHUNK_OVERLAP
+from src.config import CHUNK_SIZE, CHUNK_OVERLAP, MAX_WORKERS
 
 
 class TextChunker:
     """Split text into chunks for embedding."""
     
-    def __init__(self, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHUNK_OVERLAP, max_workers: int = 4):
+    def __init__(self, chunk_size: int = CHUNK_SIZE, chunk_overlap: int = CHUNK_OVERLAP, max_workers: int = MAX_WORKERS):
         """Initialize the text chunker.
         
         Args:
@@ -91,21 +91,27 @@ class TextChunker:
         if "slide_content" in content:
             slides = content["slide_content"]
             
-            # Process slides in parallel
-            with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
-                # Create a partial function with the slide processing logic
-                process_slide = partial(self._process_single_slide)
-                
-                # Submit all slides for processing
-                future_to_slide = {
-                    executor.submit(process_slide, slide): slide 
-                    for slide in slides
-                }
-                
-                # Collect results as they complete
-                for future in as_completed(future_to_slide):
-                    slide_chunks = future.result()
+            # If max_workers is 1, process slides sequentially to avoid threading issues
+            if self.max_workers <= 1:
+                for slide in slides:
+                    slide_chunks = self._process_single_slide(slide)
                     chunks.extend(slide_chunks)
+            else:
+                # Process slides in parallel
+                with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+                    # Create a partial function with the slide processing logic
+                    process_slide = partial(self._process_single_slide)
+                    
+                    # Submit all slides for processing
+                    future_to_slide = {
+                        executor.submit(process_slide, slide): slide 
+                        for slide in slides
+                    }
+                    
+                    # Collect results as they complete
+                    for future in as_completed(future_to_slide):
+                        slide_chunks = future.result()
+                        chunks.extend(slide_chunks)
         
         # Handle concepts/equations/diagrams/relationships structure
         elif all(key in content for key in ["concepts", "equations", "diagrams", "relationships"]):

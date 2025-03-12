@@ -33,11 +33,13 @@ KNOWLEDGE_GRAPH_PATH = os.getenv("KNOWLEDGE_GRAPH_PATH", "data/knowledge_graph")
 PDF_STORAGE_PATH = os.getenv("PDF_STORAGE_PATH", "data/pdfs")
 
 # Embedding dimensions
-EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", 768))
+EMBEDDING_DIMENSIONS = int(os.getenv("EMBEDDING_DIMENSIONS", 384))
 
 # Chunk size for text splitting
-CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 1000))
-CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 200))
+CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", 250))
+CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", 50))
+MAX_WORKERS = int(os.getenv("MAX_WORKERS", 1))
+BATCH_SIZE = int(os.getenv("BATCH_SIZE", 8))
 
 # Model settings
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")

@@ -271,3 +271,194 @@ class KnowledgeGraphBuilder:
         self.save_graph(graph_data, filename)
         
         return graph_data
+    
+    def process_content_incrementally(self, page_contents: List[Dict[str, Any]], filename: str) -> Dict[str, Any]:
+        """Process content in batches and build a unified knowledge graph.
+        
+        Args:
+            page_contents: List of content dictionaries for each batch
+            filename: Name of the file being processed
+            
+        Returns:
+            Unified knowledge graph data
+        """
+        if not page_contents:
+            return {"nodes": [], "edges": []}
+        
+        # Extract document ID from filename
+        document_id = Path(filename).stem
+        
+        # Initialize an empty merged graph
+        merged_graph = {"nodes": [], "edges": []}
+        
+        # Process each batch and merge into unified graph
+        for batch_idx, batch_content in enumerate(page_contents):
+            try:
+                # Build graph for this batch
+                batch_graph = self.build_graph(batch_content)
+                
+                # Add page range information to nodes for context
+                page_range = batch_content.get("page_range", {"start": batch_idx + 1, "end": batch_idx + 1})
+                for node in batch_graph.get("nodes", []):
+                    if "page" not in node.get("label", "").lower():
+                        node["label"] = f"{node['label']} (p{page_range['start']}-{page_range['end']})"
+                
+                # Merge with existing graph
+                if not merged_graph["nodes"] and not merged_graph["edges"]:
+                    # First batch, just use its graph
+                    merged_graph = batch_graph
+                else:
+                    # Merge with existing graph using deduplication
+                    merged_graph = self._merge_with_deduplication(merged_graph, batch_graph)
+                
+            except Exception as e:
+                import logging
+                logging.error(f"Error processing batch {batch_idx + 1}: {e}")
+                import traceback
+                logging.error(traceback.format_exc())
+        
+        # Save only the final unified graph
+        final_graph_path = os.path.join(KNOWLEDGE_GRAPH_PATH, f"{document_id}_graph.json")
+        self._save_graph(merged_graph, final_graph_path)
+        
+        return merged_graph
+    
+    def _merge_with_deduplication(self, graph1: Dict[str, Any], graph2: Dict[str, Any]) -> Dict[str, Any]:
+        """Merge two graphs with deduplication of similar concepts.
+        
+        Args:
+            graph1: First graph
+            graph2: Second graph
+            
+        Returns:
+            Merged graph
+        """
+        # Create a merged graph
+        merged_graph = {"nodes": [], "edges": []}
+        
+        # Track nodes by ID and by normalized label
+        node_ids = {}
+        node_labels = {}
+        
+        # Helper function to normalize text for comparison
+        def normalize_text(text):
+            return text.lower().strip()
+        
+        # Helper function to check if two concepts are similar
+        def are_similar_concepts(label1, label2):
+            norm1 = normalize_text(label1)
+            norm2 = normalize_text(label2)
+            
+            # Exact match
+            if norm1 == norm2:
+                return True
+            
+            # One is substring of the other
+            if norm1 in norm2 or norm2 in norm1:
+                return True
+            
+            # TODO: Could add more sophisticated similarity checks here
+            
+            return False
+        
+        # Process nodes from first graph
+        for node in graph1.get("nodes", []):
+            node_id = node["id"]
+            label = node.get("label", "")
+            
+            node_ids[node_id] = node
+            if label:
+                node_labels[normalize_text(label)] = node
+            
+            merged_graph["nodes"].append(node)
+        
+        # Process nodes from second graph
+        for node in graph2.get("nodes", []):
+            node_id = node["id"]
+            label = node.get("label", "")
+            
+            # Skip if node ID already exists
+            if node_id in node_ids:
+                continue
+            
+            # Check for similar concepts
+            is_duplicate = False
+            if label:
+                norm_label = normalize_text(label)
+                
+                for existing_label, existing_node in node_labels.items():
+                    if are_similar_concepts(norm_label, existing_label):
+                        # Found a similar concept, use the existing node ID for edges
+                        node_ids[node_id] = existing_node
+                        is_duplicate = True
+                        break
+            
+            if not is_duplicate:
+                # Add new node
+                node_ids[node_id] = node
+                if label:
+                    node_labels[normalize_text(label)] = node
+                merged_graph["nodes"].append(node)
+        
+        # Process edges from first graph
+        for edge in graph1.get("edges", []):
+            merged_graph["edges"].append(edge)
+        
+        # Process edges from second graph
+        edge_keys = set()
+        for edge in merged_graph.get("edges", []):
+            key = f"{edge.get('from', '')}_{edge.get('to', '')}_{edge.get('label', '')}"
+            edge_keys.add(key)
+        
+        for edge in graph2.get("edges", []):
+            source = edge.get("from", "")
+            target = edge.get("to", "")
+            label = edge.get("label", "")
+            
+            # Check if we need to remap node IDs due to deduplication
+            if source in node_ids:
+                source_node = node_ids[source]
+                source = source_node["id"]
+            
+            if target in node_ids:
+                target_node = node_ids[target]
+                target = target_node["id"]
+            
+            # Skip duplicate edges
+            key = f"{source}_{target}_{label}"
+            if key in edge_keys:
+                continue
+            
+            # Add new edge with possibly remapped node IDs
+            new_edge = {
+                "from": source,
+                "to": target,
+                "label": label
+            }
+            merged_graph["edges"].append(new_edge)
+            edge_keys.add(key)
+        
+        return merged_graph
+    
+    def _save_graph(self, graph_data: Dict[str, Any], output_path: str) -> None:
+        """Save graph data to a file.
+        
+        Args:
+            graph_data: Graph data to save
+            output_path: Path to save the graph data
+        """
+        try:
+            # Create directory if it doesn't exist
+            os.makedirs(os.path.dirname(output_path), exist_ok=True)
+            
+            # Save the graph data
+            with open(output_path, "w") as f:
+                json.dump(graph_data, f, indent=2)
+                
+            import logging
+            logging.info(f"Saved graph to: {output_path}")
+        except Exception as e:
+            import logging
+            logging.error(f"Error saving graph: {e}")
+            import traceback
+            logging.error(traceback.format_exc())

@@ -13,7 +13,7 @@ from sentence_transformers import SentenceTransformer
 import torch
 import logging
 
-from src.config import GOOGLE_API_KEY, EMBEDDING_DIMENSIONS, VECTOR_DB_PATH
+from src.config import GOOGLE_API_KEY, EMBEDDING_DIMENSIONS, VECTOR_DB_PATH, BATCH_SIZE
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -113,7 +113,7 @@ class Embedder:
             # Return zero vector as last resort
             return np.zeros(self.embedding_dimensions)
     
-    def generate_embeddings(self, chunks: List[Dict[str, Any]], batch_size: int = 32) -> List[Dict[str, Any]]:
+    def generate_embeddings(self, chunks: List[Dict[str, Any]], batch_size: int = BATCH_SIZE) -> List[Dict[str, Any]]:
         """Generate embeddings for a list of text chunks in batches.
         
         Args:

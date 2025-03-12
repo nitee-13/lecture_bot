@@ -219,3 +219,82 @@ class PDFExtractor:
         except Exception as e:
             logger.error(f"Error saving to file: {e}")
             raise
+
+    def process_pdf_by_pages(self, pdf_path: str) -> List[Dict[str, Any]]:
+        """Process a PDF file in batches of 5 pages and extract content.
+        
+        Args:
+            pdf_path: Path to the PDF file
+            
+        Returns:
+            List of dictionaries containing extracted content for each page
+        """
+        try:
+            # Validate PDF file
+            if not os.path.exists(pdf_path):
+                raise FileNotFoundError(f"PDF file not found: {pdf_path}")
+            
+            # Open the PDF file
+            doc = fitz.open(pdf_path)
+            num_pages = len(doc)
+            logger.info(f"Processing PDF with {num_pages} pages: {pdf_path}")
+            
+            # Process pages in batches of 5
+            page_contents = []
+            batch_size = 5
+            
+            for start_page in range(0, num_pages, batch_size):
+                end_page = min(start_page + batch_size, num_pages)
+                logger.info(f"Processing pages {start_page + 1} to {end_page}/{num_pages}")
+                
+                # Extract batch of pages as a new PDF
+                temp_pdf_path = f"{pdf_path}_batch_{start_page//batch_size + 1}.pdf"
+                new_doc = fitz.open()
+                new_doc.insert_pdf(doc, from_page=start_page, to_page=end_page-1)
+                new_doc.save(temp_pdf_path)
+                new_doc.close()
+                
+                try:
+                    # Process the batch
+                    if self.use_gemini:
+                        try:
+                            logger.info(f"Extracting text from batch {start_page//batch_size + 1} using Gemini")
+                            batch_data = self.gemini_client.process_pdf(temp_pdf_path)
+                            
+                            # If we got a dictionary response, validate it
+                            if isinstance(batch_data, dict):
+                                # Ensure all required keys are present
+                                required_keys = ["concepts", "equations", "diagrams", "relationships"]
+                                for key in required_keys:
+                                    if key not in batch_data:
+                                        batch_data[key] = []
+                                
+                                # Add page range information
+                                batch_data["page_range"] = {
+                                    "start": start_page + 1,
+                                    "end": end_page
+                                }
+                                page_contents.append(batch_data)
+                            else:
+                                logger.warning(f"Unexpected response from Gemini for batch {start_page//batch_size + 1}")
+                        except Exception as e:
+                            logger.error(f"Error processing batch {start_page//batch_size + 1} with Gemini: {e}")
+                            logger.error(traceback.format_exc())
+                    else:
+                        # Fallback to PyMuPDF for this batch
+                        logger.info(f"Extracting text from batch {start_page//batch_size + 1} using PyMuPDF")
+                        # TODO: Implement PyMuPDF fallback for batch processing
+                finally:
+                    # Clean up temporary file
+                    try:
+                        os.remove(temp_pdf_path)
+                    except Exception:
+                        pass
+            
+            doc.close()
+            return page_contents
+            
+        except Exception as e:
+            logger.error(f"Error processing PDF by pages: {e}")
+            logger.error(traceback.format_exc())
+            raise

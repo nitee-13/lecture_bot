@@ -110,6 +110,19 @@ class KnowledgeGraphPage:
             st.write(f"**Concepts:** {len(graph_data.get('nodes', []))}")
             st.write(f"**Relationships:** {len(graph_data.get('edges', []))}")
             
+            # Limit the graph size to prevent memory issues
+            MAX_NODES = 50
+            if len(graph_data.get("nodes", [])) > MAX_NODES:
+                st.warning(f"The graph is too large. Limiting to {MAX_NODES} nodes to prevent memory issues.")
+                # Keep only the first MAX_NODES nodes
+                graph_data["nodes"] = graph_data["nodes"][:MAX_NODES]
+                # Keep only edges that connect to these nodes
+                node_ids = {node["id"] for node in graph_data["nodes"]}
+                graph_data["edges"] = [
+                    edge for edge in graph_data.get("edges", [])
+                    if edge.get("from") in node_ids and edge.get("to") in node_ids
+                ]
+            
             # Show raw JSON data
             with st.expander("View Raw JSON Data"):
                 st.json(graph_data)
@@ -153,7 +166,15 @@ class KnowledgeGraphPage:
         
         # Load all graphs
         graphs = []
-        for graph_path in graph_files.values():
+        # Limit the number of graphs to merge to prevent memory issues
+        max_graphs = 5  # Limit to 5 graphs at a time
+        
+        for i, graph_path in enumerate(graph_files.values()):
+            # Stop after max_graphs to prevent memory issues
+            if i >= max_graphs:
+                st.warning(f"Only merging the first {max_graphs} graphs to prevent memory issues.")
+                break
+                
             try:
                 with open(graph_path, "r") as file:
                     graph_data = json.load(file)

@@ -4,6 +4,17 @@ Lecture Bot - A personalized chatbot for lecture slides with RAG capabilities.
 import streamlit as st
 from pathlib import Path
 import os
+import sys
+
+# Fix for semaphore leak issue on macOS
+if sys.platform == 'darwin':
+    os.environ['OBJC_DISABLE_INITIALIZE_FORK_SAFETY'] = 'YES'
+    # Limit the number of threads used by numpy and other libraries
+    os.environ['OMP_NUM_THREADS'] = '1'
+    os.environ['MKL_NUM_THREADS'] = '1'
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    os.environ['VECLIB_MAXIMUM_THREADS'] = '1'
+    os.environ['NUMEXPR_NUM_THREADS'] = '1'
 
 # Import components
 from ui.components.sidebar import Sidebar

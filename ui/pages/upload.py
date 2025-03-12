@@ -118,36 +118,52 @@ class UploadPage:
             Document ID if successful, None otherwise
         """
         try:
-            # 1. Extract text from PDF
-            status.update(label="🔍 Extracting text from PDF...", state="running")
-            extracted_data = self.pdf_extractor.process_pdf(file_path)
+            # Extract document ID from file path
+            document_id = Path(file_path).stem
+            filename = Path(file_path).name
             
-            if not extracted_data or not any(key in extracted_data for key in ["slide_content", "concepts", "equations", "diagrams", "relationships"]):
+            # 1. Process PDF page by page
+            status.update(label="🔍 Processing PDF page by page...", state="running")
+            page_contents = self.pdf_extractor.process_pdf_by_pages(file_path)
+            
+            if not page_contents:
                 logger.error("No valid content extracted from PDF")
                 raise ValueError("Failed to extract valid content from PDF")
             
-            # 2. Create chunks from the extracted text
-            status.update(label="✂️ Chunking text...", state="running")
-            chunks = self.chunker.chunk_lecture_content(extracted_data)
+            # 2. Process each page and build chunks and embeddings
+            all_chunks = []
             
-            if not chunks:
+            for page_idx, page_content in enumerate(page_contents):
+                page_num = page_idx + 1
+                status.update(label=f"✂️ Processing page {page_num}/{len(page_contents)}...", state="running")
+                
+                # Create chunks from the page content
+                page_chunks = self.chunker.chunk_lecture_content(page_content)
+                
+                if page_chunks:
+                    # Add page number to each chunk
+                    for chunk in page_chunks:
+                        chunk["page"] = page_num
+                    
+                    # Add to all chunks
+                    all_chunks.extend(page_chunks)
+            
+            if not all_chunks:
                 logger.error("No chunks created from extracted content")
                 raise ValueError("Failed to create text chunks")
             
-            # 3. Generate embeddings for chunks
+            # 3. Generate embeddings for all chunks
             status.update(label="🧠 Generating embeddings...", state="running")
-            chunks_with_embeddings = self.embedder.generate_embeddings(chunks)
+            chunks_with_embeddings = self.embedder.generate_embeddings(all_chunks)
             
             if not chunks_with_embeddings or not all("embedding" in chunk for chunk in chunks_with_embeddings):
                 logger.error("Failed to generate embeddings for chunks")
                 raise ValueError("Failed to generate embeddings")
             
-            # 4. Build knowledge graph
-            status.update(label="🔄 Building knowledge graph...", state="running")
-            document_id = Path(file_path).stem
-            filename = Path(file_path).name
-            graph_data = self.kg_builder.process_content(
-                extracted_data, 
+            # 4. Build knowledge graph incrementally
+            status.update(label="🔄 Building knowledge graph incrementally...", state="running")
+            graph_data = self.kg_builder.process_content_incrementally(
+                page_contents, 
                 filename
             )
             

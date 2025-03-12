@@ -175,3 +175,4 @@ knowledge_graph/
 # PDF processing specific
 *.pdf
 !example.pdf  # Keep example PDF if you have one
+*.sh

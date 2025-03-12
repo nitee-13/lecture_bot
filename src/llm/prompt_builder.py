@@ -110,9 +110,21 @@ Summary:"""
         formatted_contexts = "\n\n".join([f"Context {i+1}:\n{ctx}" for i, ctx in enumerate(contexts)])
         
         # Build the prompt
-        prompt = f"""Please explain the concept of "{concept}" based on the provided lecture materials.
-Provide a clear explanation with examples if available.
-Format any mathematical equations properly.
+        prompt = f"""You are a knowledgeable teaching assistant helping a student understand a concept from their lecture material.
+Please provide a detailed and comprehensive explanation of the concept "{concept}" based on the provided contexts from lecture slides.
+
+Your explanation should:
+1. Define the concept clearly and precisely
+2. Explain its significance and applications
+3. Provide examples to illustrate the concept
+4. Connect it to related concepts
+5. If equations are involved, explain them step by step
+6. If diagrams are mentioned, describe what they show
+7. If the concept has prerequisites, mention them
+8. If the concept is part of a larger framework, explain that relationship
+
+If the provided contexts don't contain enough information about "{concept}", focus on what is available and acknowledge the limitations.
+If you need to make assumptions or use general knowledge to fill gaps, clearly state that.
 
 Contexts:
 {formatted_contexts}

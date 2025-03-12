@@ -41,6 +41,10 @@ class ChatPage:
         # Initialize response type in session state if not exists
         if "response_type" not in st.session_state:
             st.session_state.response_type = "Question Answer"
+            
+        # Initialize debug mode in session state if not exists
+        if "debug_mode" not in st.session_state:
+            st.session_state.debug_mode = False
     
     def render(self):
         """Render the chat page."""
@@ -55,6 +59,10 @@ class ChatPage:
         
         # Update response type in session state
         st.session_state.response_type = response_type
+        
+        # Debug mode toggle
+        debug_mode = st.sidebar.checkbox("Debug Mode", value=st.session_state.debug_mode)
+        st.session_state.debug_mode = debug_mode
         
         # Display the chat messages
         self._display_chat_messages()
@@ -111,6 +119,7 @@ class ChatPage:
         model_name = settings.get("model", "gemini-1.5-flash")
         temperature = settings.get("temperature", 0.7)
         retrieval_k = settings.get("retrieval_k", 10)
+        debug_mode = st.session_state.get("debug_mode", False)
         
         # Create Gemini client with the selected model
         gemini_client = GeminiClient(model=model_name)
@@ -118,10 +127,37 @@ class ChatPage:
         # Retrieve relevant contexts
         contexts = self.retriever.retrieve_contexts(prompt, k=retrieval_k)
         
+        # In debug mode, show the retrieved contexts
+        if debug_mode and st.sidebar.checkbox("Show Retrieved Contexts", value=True):
+            with st.sidebar.expander("Retrieved Contexts", expanded=True):
+                if contexts:
+                    for i, context in enumerate(contexts):
+                        st.markdown(f"**Context {i+1}:**")
+                        st.text(context[:500] + "..." if len(context) > 500 else context)
+                        st.markdown("---")
+                else:
+                    st.warning("No contexts retrieved")
+        
         if not contexts:
-            # No relevant contexts found, generate response without context
+            # No relevant contexts found, inform the user and try to generate a general response
+            print("No relevant contexts found for query:", prompt)
+            
+            # In debug mode, show a warning
+            if debug_mode:
+                st.sidebar.warning("No relevant contexts found for this query")
+            
+            # Try to generate a response with a special prompt for no context
+            no_context_prompt = f"""You are a helpful teaching assistant. The user has asked about: "{prompt}"
+            
+Unfortunately, I couldn't find specific information about this in the lecture materials. 
+Please provide a general response based on your knowledge, but make it clear that this is general information 
+and not specifically from the lecture materials. If this is a very specific concept that should be in the 
+lecture materials, suggest that the user upload the relevant lecture slides if they haven't already done so.
+
+Response:"""
+            
             response = gemini_client.generate_response(
-                prompt=prompt,
+                prompt=no_context_prompt,
                 temperature=temperature
             )
         else:
@@ -140,6 +176,11 @@ class ChatPage:
                 contextualized_prompt = self.prompt_builder.build_compare_prompt(concepts[0], concepts[1], contexts)
             else:  # Problem Solving
                 contextualized_prompt = self.prompt_builder.build_solve_prompt(prompt, contexts)
+            
+            # In debug mode, show the contextualized prompt
+            if debug_mode and st.sidebar.checkbox("Show Prompt", value=False):
+                with st.sidebar.expander("Contextualized Prompt", expanded=True):
+                    st.text(contextualized_prompt)
             
             # Generate response with higher temperature for more creative responses
             response = gemini_client.generate_response(
